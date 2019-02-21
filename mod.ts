@@ -19,10 +19,24 @@ const opnames = [
         "encode_text", "copy_table", "print_table", "check_arg_count"]
 ];
 
+
+class Frame {
+    addr: number;
+    stack_start: number;
+    num_locals: number;
+    return_storage: Return;
+    return_addr: number;
+}
+
 class Memory {
     memory: Uint8Array;
+    stack: Array<number>;
+    frames: Array<Frame>;
+
     constructor(data: Uint8Array) {
         this.memory = data;
+        this.stack = [];
+        this.frames = [];
     }
     len() { return this.memory.length; }
     read_u8(offset: number) { return this.memory[offset]; }
@@ -75,6 +89,92 @@ class Return {
     value: number;
 }
 
+enum ZStringShift { Zero, One, Two }
+
+class ZString {
+    offset: number;
+    length: number;
+    contents: string;
+    constructor(mem: Memory, offset: number, max_length?: number) {
+        let length = 0;
+        let bytes = [];
+        while (true) {
+            if (max_length == length) {
+                break;
+            }
+            let x = mem.read_u16(offset + length);
+            length += 2;
+
+            bytes.push((x >> 10) & 0x1f);
+            bytes.push((x >> 5) & 0x1f);
+            bytes.push(x & 0x1f);
+
+            if ((x & 0x8000) != 0) {
+                break;
+            }
+        }
+        this.with_bytes(mem, offset, length, new Uint8Array(bytes));
+    }
+    with_bytes(mem: Memory, offset: number, length: number, bytes: Uint8Array) {
+        let shift = ZStringShift.Zero;
+        let contents = "";
+        let skip_count = 0;
+        bytes.forEach(function (c, i) {
+            if (skip_count != 0) {
+                skip_count -= 1;
+                return;
+            }
+            switch (c) {
+                case 0:
+                    contents += " ";
+                    break;
+                case 1:
+                case 2:
+                case 3:
+                    skip_count = 1; // skip abbrev
+                    let abbrev_idx = bytes[i + 1];
+                    let table = mem.read_u16(0x18);
+                    let index = 32 * (c - 1) + abbrev_idx;
+                    let table_ofs = mem.read_u16(table + index * 2);
+                    let abbrev = new ZString(mem, table_ofs * 2);
+                    contents += abbrev.contents;
+                    break;
+                case 4:
+                    shift = ZStringShift.One;
+                    break;
+                case 5:
+                    shift = ZStringShift.Two;
+                    break;
+                default:
+                    if (shift == ZStringShift.Two && c == 6) {
+                        skip_count = 2;
+                        let char = bytes[i + 1] << 5;
+                        char |= bytes[i + 2] & 0x1f;
+                        contents += String.fromCharCode(char);
+                    } else {
+                        switch (shift) {
+                            case ZStringShift.Zero:
+                                contents += "______abcdefghijklmnopqrstuvwxyz"[c];
+                                break;
+                            case ZStringShift.One:
+                                contents += "______ABCDEFGHIJKLMNOPQRSTUVWXYZ"[c];
+                                break;
+                            case ZStringShift.Two:
+                                contents += "______^\n0123456789.,!?_#\'\"/\\-:()"[c];
+                                break;
+                        }
+                    }
+                    shift = ZStringShift.Zero;
+                    break;
+            }
+        });
+        this.offset = offset;
+        this.length = length;
+        this.contents = contents;
+    }
+}
+
+
 class Instruction {
     constructor(mem: Memory, ip: number) {
         const op = mem.read_u8(ip);
@@ -83,11 +183,13 @@ class Instruction {
             case 2: this.decode_short(mem, ip, op); break;
             default: this.decode_long(mem, ip, op); break;
         }
-        this.add_return(mem);
         this.name = opnames[this.optype][this.opcode];
         if (this.name == undefined) {
             this.name = "unknown";
         }
+        this.add_return(mem);
+        this.add_branch(mem);
+        this.add_print(mem);
     }
 
     decode_short(mem: Memory, ip: number, op: number) {
@@ -205,6 +307,60 @@ class Instruction {
                 break;
         }
     }
+    add_branch(mem: Memory) {
+        let branches = false;
+        switch (this.optype) {
+            case Encoding.Op2:
+                if ((this.opcode >= 1 && this.opcode <= 7) || this.opcode == 10) {
+                    branches = true;
+                }
+                break;
+            case Encoding.Op1:
+                if (this.opcode <= 2) {
+                    branches = true;
+                }
+                break;
+            case Encoding.Op0:
+                if (this.opcode == 5 || this.opcode == 6 || this.opcode == 0xd || this.opcode == 0xf) {
+                    branches = true;
+                }
+                break;
+            default: break;
+        }
+        if (branches) {
+            const branch1 = mem.read_u8(this.offset + this.length);
+            let offset = (0x80 & branch1) << 8;
+            let len = 0;
+            if (branch1 & 0x40) {
+                offset |= (branch1 & 0x3f);
+                len = 1;
+            } else {
+                const branch2 = mem.read_u8(this.offset + this.length + 1);
+                offset |= (branch1 & 0x1f) << 8;
+                offset |= branch2;
+                len = 2;
+            }
+            const compare = (offset & 0x8000) != 0;
+            offset = offset & 0x7fff;
+            if (offset > 0x0fff) {
+                offset = -(0x1fff - offset + 1);
+            }
+            this.jump_offset = offset;
+            this.length += 1;
+            this.compare = compare;
+        } else {
+            this.jump_offset = undefined;
+            this.compare = undefined;
+        }
+    }
+    add_print(mem: Memory) {
+        if (this.optype == Encoding.Op0 && (this.opcode == 2 || this.opcode == 3)) {
+            this.string = new ZString(mem, this.offset + this.length);
+            this.length += this.string.length;
+        } else {
+            this.string = undefined;
+        }
+    }
     args: Array<Operand>;
     offset: number;
     opcode: number;
@@ -212,6 +368,9 @@ class Instruction {
     name: string;
     length: number;
     ret: Return;
+    jump_offset: number;
+    compare: boolean;
+    string: ZString;
 }
 
 class Machine {
@@ -229,17 +388,13 @@ class Machine {
 
     run() {
         while (!this.finished) {
-            let instruction = this.decode();
+            let instruction = new Instruction(this.memory, this.ip);
             this.execute(instruction);
         }
     }
 
     execute(instruction: Instruction) {
         console.log(instruction);
-    }
-
-    decode() {
-        return new Instruction(this.memory, this.ip);
     }
 }
 
