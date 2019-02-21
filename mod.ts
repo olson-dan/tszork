@@ -83,14 +83,60 @@ class Instruction {
             case 2: this.decode_short(mem, ip, op); break;
             default: this.decode_long(mem, ip, op); break;
         }
+        this.add_return(mem);
+        this.name = opnames[this.optype][this.opcode];
+        if (this.name == undefined) {
+            this.name = "unknown";
+        }
     }
 
     decode_short(mem: Memory, ip: number, op: number) {
+        this.offset = ip;
+        this.opcode = op & 0xf;
+        this.args = [];
+        switch ((op & 0x30) >> 4) {
+            case 3:
+                this.optype = Encoding.Op0;
+                this.length = 1;
+                break;
+            case 2:
+                this.optype = Encoding.Op1;
+                this.length = 2;
+                this.args[0] = { type: OperandType.Variable, value: mem.read_u8(ip + 1) };
+                break;
+            case 1:
+                this.optype = Encoding.Op1;
+                this.length = 2;
+                this.args[0] = { type: OperandType.Small, value: mem.read_u8(ip + 1) };
+                break;
+            default:
+                this.optype = Encoding.Op1;
+                this.length = 3;
+                this.args[0] = { type: OperandType.Large, value: mem.read_u16(ip + 1) };
+                break;
+        }
     }
     decode_long(mem: Memory, ip: number, op: number) {
+        const x = mem.read_u8(ip + 1);
+        const y = mem.read_u8(ip + 2);
+        this.offset = ip;
+        this.opcode = op & 0x1f;
+        this.optype = Encoding.Op2;
+        this.length = 3;
+        this.args = [];
+        if ((op & 0x40) != 0) {
+            this.args[0] = { type: OperandType.Variable, value: x };
+        } else {
+            this.args[0] = { type: OperandType.Small, value: x };
+        }
+        if ((op & 0x20) != 0) {
+            this.args[1] = { type: OperandType.Variable, value: y };
+        } else {
+            this.args[1] = { type: OperandType.Small, value: y };
+        }
     }
     decode_var(mem: Memory, ip: number, op: number) {
-        let optypes = mem.read_u8(ip + 1);
+        const optypes = mem.read_u8(ip + 1);
         let size = 2;
         let args = [];
         [0, 1, 2, 3].forEach(function (x) {
@@ -128,9 +174,36 @@ class Instruction {
         } else {
             this.optype = Encoding.Op2;
         }
-        this.name = opnames[this.optype][this.opcode];
         this.length = size;
+    }
+
+    add_return(mem: Memory) {
         this.ret = { type: RetType.Omitted, value: 0 };
+        switch (this.optype) {
+            case Encoding.Op2:
+                if ((this.opcode >= 0x08 && this.opcode <= 0x09)
+                    || (this.opcode >= 0x0f && this.opcode <= 0x19)) {
+                    this.ret = { type: RetType.Variable, value: mem.read_u8(this.offset + this.length) };
+                    this.length += 1;
+                }
+                break;
+            case Encoding.Op1:
+                if ((this.opcode >= 0x01 && this.opcode <= 0x04)
+                    || this.opcode == 0x08
+                    || (this.opcode >= 0x0e && this.opcode <= 0x0f)) {
+                    this.ret = { type: RetType.Variable, value: mem.read_u8(this.offset + this.length) };
+                    this.length += 1;
+                }
+                break;
+            case Encoding.Var:
+                if (this.opcode == 0x0 || this.opcode == 0x7) {
+                    this.ret = { type: RetType.Variable, value: mem.read_u8(this.offset + this.length) };
+                    this.length += 1;
+                }
+                break;
+            default:
+                break;
+        }
     }
     args: Array<Operand>;
     offset: number;
@@ -162,7 +235,7 @@ class Machine {
     }
 
     execute(instruction: Instruction) {
-        console.log(instruction.name);
+        console.log(instruction);
     }
 
     decode() {
