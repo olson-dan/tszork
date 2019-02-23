@@ -20,6 +20,28 @@ const opnames = [
 ];
 
 
+function toPaddedHex(n: number, padding: number) {
+    let x = n.toString(16);
+    while (x.length < padding) {
+        x = "0" + x;
+    }
+    return x;
+}
+
+function u16(x: number) {
+    if (x < 0) {
+        return x + 65536;
+    }
+    return x;
+}
+
+function i16(x: number) {
+    if (x > 32767) {
+        return x - 65536;
+    }
+    return x;
+}
+
 class Frame {
     addr: number;
     stack_start: number;
@@ -82,11 +104,67 @@ enum RetType { Variable, Indirect, Omitted }
 class Operand {
     type: OperandType;
     value: number;
+    constructor(type: OperandType, value: number) {
+        this.type = type;
+        this.value = value;
+    }
+    display() {
+        switch (this.type) {
+            case OperandType.Large:
+                return "#" + toPaddedHex(this.value, 4);
+            case OperandType.Small:
+                return "#" + toPaddedHex(this.value, 2);
+            case OperandType.Variable:
+                if (this.value == 0) {
+                    return "(SP)+";
+                } else if (this.value > 0x10) {
+                    return "G" + toPaddedHex(this.value - 0x10, 2);
+                } else {
+                    return "L" + toPaddedHex(this.value - 1, 2);
+                }
+            case OperandType.Indirect:
+                if (this.value == 0) {
+                    return "[(SP)]";
+                } else if (this.value > 0x10) {
+                    return "[G" + toPaddedHex(this.value - 0x10, 2) + "]";
+                } else {
+                    return "[L" + toPaddedHex(this.value - 1, 2) + "]";
+                }
+            case OperandType.Omitted:
+                return "";
+        }
+    }
 }
 
 class Return {
     type: RetType;
     value: number;
+    constructor(type: RetType, value: number) {
+        this.type = type;
+        this.value = value;
+    }
+    display() {
+        switch (this.type) {
+            case RetType.Variable:
+                if (this.value == 0) {
+                    return " -> -(SP)";
+                } else if (this.value > 0x10) {
+                    return " -> G" + toPaddedHex(this.value - 0x10, 2);
+                } else {
+                    return " -> L" + toPaddedHex(this.value - 1, 2);
+                }
+            case RetType.Indirect:
+                if (this.value == 0) {
+                    return " -> (SP)";
+                } else if (this.value > 0x10) {
+                    return " -> G" + toPaddedHex(this.value - 0x10, 2);
+                } else {
+                    return " -> L" + toPaddedHex(this.value - 1, 2);
+                }
+            case RetType.Omitted:
+                return "";
+        }
+    }
 }
 
 enum ZStringShift { Zero, One, Two }
@@ -204,17 +282,17 @@ class Instruction {
             case 2:
                 this.optype = Encoding.Op1;
                 this.length = 2;
-                this.args[0] = { type: OperandType.Variable, value: mem.read_u8(ip + 1) };
+                this.args[0] = new Operand(OperandType.Variable, mem.read_u8(ip + 1));
                 break;
             case 1:
                 this.optype = Encoding.Op1;
                 this.length = 2;
-                this.args[0] = { type: OperandType.Small, value: mem.read_u8(ip + 1) };
+                this.args[0] = new Operand(OperandType.Small, mem.read_u8(ip + 1));
                 break;
             default:
                 this.optype = Encoding.Op1;
                 this.length = 3;
-                this.args[0] = { type: OperandType.Large, value: mem.read_u16(ip + 1) };
+                this.args[0] = new Operand(OperandType.Large, mem.read_u16(ip + 1));
                 break;
         }
     }
@@ -227,44 +305,38 @@ class Instruction {
         this.length = 3;
         this.args = [];
         if ((op & 0x40) != 0) {
-            this.args[0] = { type: OperandType.Variable, value: x };
+            this.args[0] = new Operand(OperandType.Variable, x);
         } else {
-            this.args[0] = { type: OperandType.Small, value: x };
+            this.args[0] = new Operand(OperandType.Small, x);
         }
         if ((op & 0x20) != 0) {
-            this.args[1] = { type: OperandType.Variable, value: y };
+            this.args[1] = new Operand(OperandType.Variable, y);
         } else {
-            this.args[1] = { type: OperandType.Small, value: y };
+            this.args[1] = new Operand(OperandType.Small, y);
         }
     }
     decode_var(mem: Memory, ip: number, op: number) {
         const optypes = mem.read_u8(ip + 1);
         let size = 2;
-        let args = [];
-        Array(4).forEach(x => {
+        let args: Array<Operand> = [];
+        [0, 1, 2, 3].forEach(x => {
             let shift = (3 - x) * 2;
             let mask = 3 << shift;
             switch ((optypes & mask) >> shift) {
                 case 3:
-                    args[x] = { type: OperandType.Omitted, value: 0 };
+                    args[x] = new Operand(OperandType.Omitted, 0);
                     break;
                 case 2:
                     size += 1;
-                    args[x] = {
-                        type: OperandType.Variable, value: mem.read_u8(ip + size - 1)
-                    };
+                    args[x] = new Operand(OperandType.Variable, mem.read_u8(ip + size - 1));
                     break;
                 case 1:
                     size += 1;
-                    args[x] = {
-                        type: OperandType.Small, value: mem.read_u8(ip + size - 1)
-                    };
+                    args[x] = new Operand(OperandType.Small, mem.read_u8(ip + size - 1));
                     break;
                 default:
                     size += 2;
-                    args[x] = {
-                        type: OperandType.Large, value: mem.read_u16(ip + size - 2)
-                    };
+                    args[x] = new Operand(OperandType.Large, mem.read_u16(ip + size - 2));
                     break;
             }
         });
@@ -280,12 +352,12 @@ class Instruction {
     }
 
     add_return(mem: Memory) {
-        this.ret = { type: RetType.Omitted, value: 0 };
+        this.ret = new Return(RetType.Omitted, 0);
         switch (this.optype) {
             case Encoding.Op2:
                 if ((this.opcode >= 0x08 && this.opcode <= 0x09)
                     || (this.opcode >= 0x0f && this.opcode <= 0x19)) {
-                    this.ret = { type: RetType.Variable, value: mem.read_u8(this.offset + this.length) };
+                    this.ret = new Return(RetType.Variable, mem.read_u8(this.offset + this.length));
                     this.length += 1;
                 }
                 break;
@@ -293,13 +365,13 @@ class Instruction {
                 if ((this.opcode >= 0x01 && this.opcode <= 0x04)
                     || this.opcode == 0x08
                     || (this.opcode >= 0x0e && this.opcode <= 0x0f)) {
-                    this.ret = { type: RetType.Variable, value: mem.read_u8(this.offset + this.length) };
+                    this.ret = new Return(RetType.Variable, mem.read_u8(this.offset + this.length));
                     this.length += 1;
                 }
                 break;
             case Encoding.Var:
                 if (this.opcode == 0x0 || this.opcode == 0x7) {
-                    this.ret = { type: RetType.Variable, value: mem.read_u8(this.offset + this.length) };
+                    this.ret = new Return(RetType.Variable, mem.read_u8(this.offset + this.length));
                     this.length += 1;
                 }
                 break;
@@ -346,7 +418,7 @@ class Instruction {
                 offset = -(0x1fff - offset + 1);
             }
             this.jump_offset = offset;
-            this.length += 1;
+            this.length += len;
             this.compare = compare;
         } else {
             this.jump_offset = undefined;
@@ -360,6 +432,35 @@ class Instruction {
         } else {
             this.string = undefined;
         }
+    }
+    display() {
+        const args = this.args.map(x => x.display()).join(",");
+        const offset = toPaddedHex(this.offset, 8).toUpperCase();
+        const name = this.name.toUpperCase();
+        const ret = this.ret.display();
+        let out = `[${offset}] ${name}\t${args}${ret}`;
+        if (this.compare != undefined) {
+            out += " [" + this.compare.toString().toUpperCase() + "]";
+        }
+        if (this.jump_offset != undefined) {
+            switch (this.jump_offset) {
+                case 0:
+                    out += " RFALSE";
+                    break;
+                case 1:
+                    out += " RTRUE";
+                    break;
+                default: {
+                    const jump_offset = this.offset + this.length + this.jump_offset - 2;
+                    out += " " + toPaddedHex(jump_offset, 8).toUpperCase();
+                }
+
+            }
+        }
+        if (this.string != undefined) {
+            out += " \"" + this.string.contents + "\"";
+        }
+        return out;
     }
     args: Array<Operand>;
     offset: number;
@@ -394,11 +495,66 @@ class Machine {
     }
 
     execute(i: Instruction) {
-        console.log(i);
-        if (i.name == "call") {
-            this.call(i);
+        console.log(i.display());
+        const ip = this.ip;
+        switch (i.name) {
+            case "call": this.call(i); break;;
+            case "store": {
+                const [x, y] = i.args.map(x => this.read_var(x));
+                this.write_var(new Return(RetType.Indirect, x), y);
+                break;
+            }
+            case "print": IO.output(i.string.contents); break;
+            case "print_paddr": {
+                const [x] = i.args.map(x => x.value);
+                const paddr = this.header.dynamic_start + 2 * x
+                const s = new ZString(this.memory, paddr);
+                IO.output(s.contents);
+                break;
+            }
+            case "inc": {
+                const [x] = i.args.map(x => this.read_var(x));
+                const old = this.read_var(new Operand(OperandType.Variable, x));
+                const inc = u16((i16(old) + 1) % 0x10000);
+                this.write_var(new Return(RetType.Indirect, x), inc);
+                break;
+            }
+            case "rtrue": this.ret(1); break;
+            case "rfalse": this.ret(0); break;
+            case "jz": {
+                const [x] = i.args.map(x => this.read_var(x));
+                console.log(x);
+                this.jump(i, x == 0);
+                break;
+            }
+            case "print_num": {
+                const [x] = i.args.map(x => i16(this.read_var(x)));
+                IO.output(x.toString());
+                break;
+            }
+            case "add": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.write_var(i.ret, u16((x + y) % 0x10000));
+                break;
+            }
+            case "je": {
+                const [x] = i.args.map(x => this.read_var(x));
+                const compare = i.args.slice(1).some(b => x == this.read_var(b));
+                this.jump(i, compare);
+                break;
+            }
+            case "jump": {
+                const [x] = i.args.map(x => i16(this.read_var(x)));
+                this.ip = u16(this.ip + i.length + x - 2);
+                break;
+            }
+            default:
+                console.log(`Unknown instruction "${i.name}"`)
+                this.finished = true;
         }
-
+        if (this.ip == ip) {
+            this.ip += i.length;
+        }
     }
 
     write_local(v: number, val: number) {
@@ -478,7 +634,8 @@ class Machine {
                 return_storage: i.ret,
                 return_addr: ret_addr,
             });
-            Array(num_locals).forEach(arg => {
+            const range = [...Array(num_locals).keys()];
+            range.forEach(arg => {
                 if (arg < args.length) {
                     this.memory.stack.push(args[arg]);
                 } else {
@@ -488,6 +645,41 @@ class Machine {
             });
             this.ip = addr + 1 + num_locals * 2;
         }
+    }
+
+    ret(val: number) {
+        const frame = this.memory.frames.pop();
+        while (this.memory.stack.length != frame.stack_start) {
+            this.memory.stack.pop();
+        }
+        this.write_var(frame.return_storage, val);
+        this.ip = frame.return_addr;
+    }
+
+    jump(i: Instruction, compare: boolean) {
+        if (compare == i.compare) {
+            switch (i.jump_offset) {
+                case 0: this.ret(0); break;
+                case 1: this.ret(1); break;
+                default:
+                    const offset = i.offset + i.length + i.jump_offset - 2;
+                    this.ip = u16(offset);
+                    break;
+
+            }
+        }
+    }
+}
+namespace IO {
+    export function output(s: string) {
+        let arr = new Uint8Array(s.length);
+        for (var i = 0, j = s.length; i < j; ++i) {
+            arr[i] = s.charCodeAt(i);
+        }
+        Deno.stdout.write(arr);
+    }
+    export function input() {
+        return "";
     }
 }
 
