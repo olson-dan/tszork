@@ -241,7 +241,7 @@ class Instruction {
         const optypes = mem.read_u8(ip + 1);
         let size = 2;
         let args = [];
-        [0, 1, 2, 3].forEach(function (x) {
+        Array(4).forEach(x => {
             let shift = (3 - x) * 2;
             let mask = 3 << shift;
             switch ((optypes & mask) >> shift) {
@@ -368,9 +368,9 @@ class Instruction {
     name: string;
     length: number;
     ret: Return;
-    jump_offset: number;
-    compare: boolean;
-    string: ZString;
+    jump_offset: number | undefined;
+    compare: boolean | undefined;
+    string: ZString | undefined;
 }
 
 class Machine {
@@ -393,8 +393,101 @@ class Machine {
         }
     }
 
-    execute(instruction: Instruction) {
-        console.log(instruction);
+    execute(i: Instruction) {
+        console.log(i);
+        if (i.name == "call") {
+            this.call(i);
+        }
+
+    }
+
+    write_local(v: number, val: number) {
+        if (this.memory.frames.length > 0) {
+            const frame = this.memory.frames[this.memory.frames.length - 1];
+            const index = frame.stack_start + v;
+            this.memory.stack[index] = val;
+        }
+    }
+
+    write_global(v: number, val: number) {
+        const offset = this.header.globals + this.header.dynamic_start + v * 2;
+        return this.memory.write_u16(offset, val);
+    }
+
+    write_var(v: Return, val: number) {
+        if (v.type == RetType.Variable || v.type == RetType.Indirect) {
+            if (v.value >= 0x10) {
+                this.write_global(v.value - 0x10, val);
+            } else if (v.value == 0) {
+                if (v.type == RetType.Indirect) {
+                } else {
+                    this.memory.stack.push(val);
+                }
+            } else {
+                this.write_local(v.value - 1, val);
+            }
+        }
+    }
+
+    read_local(v: number) {
+        if (this.memory.frames.length > 0) {
+            const frame = this.memory.frames[this.memory.frames.length - 1];
+            const index = frame.stack_start + v;
+            return this.memory.stack[index];
+        } else {
+            return 0;
+        }
+    }
+
+    read_global(v: number) {
+        const offset = this.header.globals + this.header.dynamic_start + v * 2;
+        return this.memory.read_u16(offset);
+    }
+
+    read_var(v: Operand) {
+        if (v.type == OperandType.Variable || v.type == OperandType.Indirect) {
+            if (v.value >= 0x10) {
+                return this.read_global(v.value - 0x10);
+            } else if (v.value == 0) {
+                if (v.type == OperandType.Indirect) {
+                    return this.memory.stack[this.memory.stack.length - 1];
+                } else {
+                    return this.memory.stack.pop();
+                }
+            } else {
+                return this.read_local(v.value - 1);
+            }
+        } else {
+            return v.value
+        }
+    }
+
+    call(i: Instruction) {
+        const addr = this.header.dynamic_start + this.read_var(i.args[0]) * 2;
+        const ret_addr = this.ip + i.length;
+        const args = i.args.slice(1).map(x => this.read_var(x));
+        if (addr - this.header.dynamic_start == 0) {
+            this.write_var(i.ret, 0);
+            this.ip = ret_addr;
+        } else {
+            const num_locals = this.memory.read_u8(addr);
+            this.memory.frames.push({
+                addr: addr,
+                stack_start: this.memory.stack.length,
+                num_locals: num_locals,
+                return_storage: i.ret,
+                return_addr: ret_addr,
+            });
+            Array(num_locals).forEach(arg => {
+                if (arg < args.length) {
+                    this.memory.stack.push(args[arg]);
+                } else {
+                    const x = this.memory.read_u16(addr + 1 + arg * 2);
+                    this.memory.stack.push(x);
+                }
+            });
+            this.ip = addr + 1 + num_locals * 2;
+        }
     }
 }
 
