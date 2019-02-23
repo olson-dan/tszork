@@ -495,7 +495,7 @@ class Machine {
     }
 
     execute(i: Instruction) {
-        console.log(i.display());
+        //console.log(i.display());
         const ip = this.ip;
         switch (i.name) {
             case "call": this.call(i); break;;
@@ -513,7 +513,7 @@ class Machine {
                 break;
             }
             case "inc": {
-                const [x] = i.args.map(x => this.read_var(x));
+                const [x] = i.args.map(x => this.read_direct(x));
                 const old = this.read_var(new Operand(OperandType.Variable, x));
                 const inc = u16((i16(old) + 1) % 0x10000);
                 this.write_var(new Return(RetType.Indirect, x), inc);
@@ -523,7 +523,6 @@ class Machine {
             case "rfalse": this.ret(0); break;
             case "jz": {
                 const [x] = i.args.map(x => this.read_var(x));
-                console.log(x);
                 this.jump(i, x == 0);
                 break;
             }
@@ -546,6 +545,37 @@ class Machine {
             case "jump": {
                 const [x] = i.args.map(x => i16(this.read_var(x)));
                 this.ip = u16(this.ip + i.length + x - 2);
+                break;
+            }
+            case "jg": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.jump(i, x > y);
+                break;
+            }
+            case "jl": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.jump(i, x < y);
+                break;
+            }
+            case "push": {
+                const [x] = i.args.map(x => this.read_var(x));
+                this.write_var(new Return(RetType.Variable, 0), x);
+                break;
+            }
+            case "pop": {
+                this.read_var(new Operand(OperandType.Variable, 0));
+                break;
+            }
+            case "pull": {
+                const [x] = i.args.map(x => this.read_direct(x));
+                const val = this.read_var(new Operand(OperandType.Variable, 0));
+                this.write_var(new Return(RetType.Indirect, x), val);
+                break;
+            }
+            case "load": {
+                const [x] = i.args.map(x => this.read_direct(x));
+                const val = this.read_var(new Operand(OperandType.Indirect, x));
+                this.write_var(i.ret, val);
                 break;
             }
             default:
@@ -616,6 +646,10 @@ class Machine {
         } else {
             return v.value
         }
+    }
+
+    read_direct(v: Operand) {
+        return this.read_var(v);
     }
 
     call(i: Instruction) {
