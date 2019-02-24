@@ -640,6 +640,42 @@ class Machine {
                 this.write_var(i.ret, x | y);
                 break;
             }
+            case "loadw": {
+                const [x, y] = i.args.map(x => this.read_var(x));
+                const addr = this.header.dynamic_start + x + 2 * y;
+                const val = this.memory.read_u16(addr);
+                this.write_var(i.ret, val);
+                break;
+            }
+            case "loadb": {
+                const [x, y] = i.args.map(x => this.read_var(x));
+                const addr = this.header.dynamic_start + x + y;
+                const val = this.memory.read_u8(addr);
+                this.write_var(i.ret, val);
+                break;
+            }
+            case "storeb": {
+                const [x, y, val] = i.args.map(x => this.read_var(x));
+                const addr = this.header.dynamic_start + x + 2 * y;
+                this.memory.write_u8(addr, val);
+                break;
+            }
+            case "storew": {
+                const [x, y, val] = i.args.map(x => this.read_var(x));
+                const addr = this.header.dynamic_start + x + 2 * y;
+                this.memory.write_u16(addr, val);
+                break;
+            }
+            case "ret": {
+                const [val] = i.args.map(x => this.read_var(x));
+                this.ret(val);
+                break;
+            }
+            case "ret_popped": {
+                const val = this.read_var(new Operand(OperandType.Variable, 0));
+                this.ret(val);
+                break;
+            }
             default:
                 console.log(`Unknown instruction "${i.name}"`)
                 this.finished = true;
