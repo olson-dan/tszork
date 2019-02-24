@@ -30,9 +30,9 @@ function toPaddedHex(n: number, padding: number) {
 
 function u16(x: number) {
     if (x < 0) {
-        return x + 65536;
+        return Math.ceil(x) + 65536;
     }
-    return x;
+    return Math.floor(x);
 }
 
 function i16(x: number) {
@@ -210,11 +210,11 @@ class ZString {
                 case 2:
                 case 3:
                     skip_count = 1; // skip abbrev
-                    let abbrev_idx = bytes[i + 1];
-                    let table = mem.read_u16(0x18);
-                    let index = 32 * (c - 1) + abbrev_idx;
-                    let table_ofs = mem.read_u16(table + index * 2);
-                    let abbrev = new ZString(mem, table_ofs * 2);
+                    const abbrev_idx = bytes[i + 1];
+                    const table = mem.read_u16(0x18);
+                    const index = 32 * (c - 1) + abbrev_idx;
+                    const table_ofs = mem.read_u16(table + index * 2);
+                    const abbrev = new ZString(mem, table_ofs * 2);
                     contents += abbrev.contents;
                     break;
                 case 4:
@@ -601,6 +601,26 @@ class Machine {
                 const inc = old + 1;
                 this.write_var(new Return(RetType.Variable, x), u16(inc));
                 this.jump(i, inc > y);
+                break;
+            }
+            case "sub": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.write_var(i.ret, u16((x - y) % 0x10000));
+                break;
+            }
+            case "mul": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.write_var(i.ret, u16((x * y) % 0x10000));
+                break;
+            }
+            case "div": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.write_var(i.ret, u16(x / y));
+                break;
+            }
+            case "mod": {
+                const [x, y] = i.args.map(x => i16(this.read_var(x)));
+                this.write_var(i.ret, u16(x % y));
                 break;
             }
             default:
