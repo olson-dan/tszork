@@ -516,7 +516,7 @@ class Machine {
                 const [x] = i.args.map(x => this.read_direct(x));
                 const old = this.read_var(new Operand(OperandType.Variable, x));
                 const inc = u16((i16(old) + 1) % 0x10000);
-                this.write_var(new Return(RetType.Indirect, x), inc);
+                this.write_var(new Return(RetType.Variable, x), inc);
                 break;
             }
             case "rtrue": this.ret(1); break;
@@ -576,6 +576,31 @@ class Machine {
                 const [x] = i.args.map(x => this.read_direct(x));
                 const val = this.read_var(new Operand(OperandType.Indirect, x));
                 this.write_var(i.ret, val);
+                break;
+            }
+            case "dec": {
+                const [x] = i.args.map(x => this.read_direct(x));
+                const old = this.read_var(new Operand(OperandType.Variable, x));
+                const dec = u16((i16(old) - 1) % 0x10000);
+                this.write_var(new Return(RetType.Variable, x), dec);
+                break;
+            }
+            case "dec_chk": {
+                const x = this.read_direct(i.args[0]);
+                const y = i16(this.read_var(i.args[1]));
+                const old = i16(this.read_var(new Operand(OperandType.Variable, x)));
+                const dec = old - 1;
+                this.write_var(new Return(RetType.Variable, x), u16(dec));
+                this.jump(i, dec < y);
+                break;
+            }
+            case "inc_chk": {
+                const x = this.read_direct(i.args[0]);
+                const y = i16(this.read_var(i.args[1]));
+                const old = i16(this.read_var(new Operand(OperandType.Variable, x)));
+                const inc = old + 1;
+                this.write_var(new Return(RetType.Variable, x), u16(inc));
+                this.jump(i, inc > y);
                 break;
             }
             default:
