@@ -29,7 +29,9 @@ function toPaddedHex(n: number, padding: number) {
 }
 
 function u16(x: number) {
-    if (x < 0) {
+    if (Math.ceil(x) == 0) {
+        return 0;
+    } else if (x < 0) {
         return Math.ceil(x) + 65536;
     }
     return Math.floor(x);
@@ -506,7 +508,7 @@ class Machine {
             }
             case "print": IO.output(i.string.contents); break;
             case "print_paddr": {
-                const [x] = i.args.map(x => x.value);
+                const [x] = i.args.map(x => this.read_var(x));
                 const paddr = this.header.dynamic_start + 2 * x
                 const s = new ZString(this.memory, paddr);
                 IO.output(s.contents);
@@ -621,6 +623,21 @@ class Machine {
             case "mod": {
                 const [x, y] = i.args.map(x => i16(this.read_var(x)));
                 this.write_var(i.ret, u16(x % y));
+                break;
+            }
+            case "not": {
+                const [x] = i.args.map(x => this.read_var(x));
+                this.write_var(i.ret, ~x & 0xffff);
+                break;
+            }
+            case "and": {
+                const [x, y] = i.args.map(x => this.read_var(x));
+                this.write_var(i.ret, x & y);
+                break;
+            }
+            case "or": {
+                const [x, y] = i.args.map(x => this.read_var(x));
+                this.write_var(i.ret, x | y);
                 break;
             }
             default:
